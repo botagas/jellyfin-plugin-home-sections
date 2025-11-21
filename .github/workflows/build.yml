@@ -1,0 +1,117 @@
+name: Build Plugin
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+    
+    - name: Restore dependencies
+      run: dotnet restore src/Jellyfin.Plugin.HomeScreenSections.sln /p:JellyfinVersion=10.10.7
+    
+    - name: Build
+      run: dotnet build src/Jellyfin.Plugin.HomeScreenSections.sln --configuration Release --no-restore /p:JellyfinVersion=10.10.7
+    
+    - name: Get version from assembly
+      id: get_version
+      run: |
+        VERSION=$(grep -oP 'AssemblyVersion\("\K[^"]+' src/Jellyfin.Plugin.HomeScreenSections/Properties/AssemblyInfo.cs | head -1)
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Plugin version: $VERSION"
+    
+    - name: Create plugin zip
+      run: |
+        cd src/Jellyfin.Plugin.HomeScreenSections/bin/Release
+        # Find the .net target framework directory (e.g., net8.0)
+        FRAMEWORK_DIR=$(ls -d net* | head -1)
+        cd $FRAMEWORK_DIR
+        zip -r ../../../../../jellyfin-plugin-home-sections-${{ steps.get_version.outputs.version }}.zip .
+    
+    - name: Prepare artifact directory
+      run: |
+        mkdir -p artifact
+        mv jellyfin-plugin-home-sections-*.zip artifact/
+    
+    - name: Generate checksum
+      id: checksum
+      run: |
+        CHECKSUM=$(md5sum artifact/jellyfin-plugin-home-sections-${{ steps.get_version.outputs.version }}.zip | awk '{print $1}')
+        echo "checksum=$CHECKSUM" >> $GITHUB_OUTPUT
+        echo "Checksum: $CHECKSUM"
+    
+    - name: Update manifest checksum and timestamp
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        VERSION="${{ steps.get_version.outputs.version }}"
+        CHECKSUM="${{ steps.checksum.outputs.checksum }}"
+        TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        
+        # Only update checksum and timestamp for existing version
+        jq ".[0].versions = [.[0].versions[] | if .version == \"$VERSION\" then .checksum = \"$CHECKSUM\" | .timestamp = \"$TIMESTAMP\" else . end]" manifest.json > manifest.tmp
+        mv manifest.tmp manifest.json
+        
+        echo "Updated manifest.json:"
+        cat manifest.json
+    
+    - name: Commit updated manifest
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add manifest.json
+        git diff --staged --quiet || git commit -m "Update manifest checksum and timestamp for v${{ steps.get_version.outputs.version }}"
+        git push
+    
+    - name: Create or update release tag
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        RELEASE_TAG="v${{ steps.get_version.outputs.version }}"
+        git tag -f $RELEASE_TAG
+        git push origin $RELEASE_TAG --force
+    
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: jellyfin-plugin-home-sections-${{ steps.get_version.outputs.version }}
+        path: artifact/
+        compression-level: 0
+    
+    - name: Check if release exists
+      if: github.event_name == 'workflow_dispatch'
+      id: check_release
+      run: |
+        RELEASE_TAG="v${{ steps.get_version.outputs.version }}"
+        if gh release view $RELEASE_TAG >/dev/null 2>&1; then
+          echo "exists=true" >> $GITHUB_OUTPUT
+          echo "Release $RELEASE_TAG exists"
+        else
+          echo "exists=false" >> $GITHUB_OUTPUT
+          echo "Release $RELEASE_TAG does not exist - creating it"
+          gh release create $RELEASE_TAG --title "v${{ steps.get_version.outputs.version }}" --notes "Release v${{ steps.get_version.outputs.version }}"
+        fi
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Upload to release
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        RELEASE_TAG="v${{ steps.get_version.outputs.version }}"
+        gh release upload $RELEASE_TAG artifact/jellyfin-plugin-home-sections-*.zip --clobber
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
