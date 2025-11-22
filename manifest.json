@@ -12,8 +12,8 @@
         "changelog": "Added external URL support for Jellyseerr to separate internal API requests from frontend links",
         "targetAbi": "10.10.7.0",
         "sourceUrl": "https://github.com/botagas/jellyfin-plugin-home-sections/releases/download/v2.4.12.0/jellyfin-plugin-home-sections-2.4.12.0.zip",
-        "checksum": "0ea262941f6b958b84db62f89f17a268",
-        "timestamp": "2025-11-22T02:11:11Z"
+        "checksum": "37040b2738a03ab2574ca632f65cb215",
+        "timestamp": "2025-11-22T02:16:58Z"
       }
     ]
   }
